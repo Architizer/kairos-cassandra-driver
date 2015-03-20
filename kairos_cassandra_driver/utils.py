@@ -27,3 +27,24 @@ def drop_keyspace(cluster, name):
     if name in cluster.metadata.keyspaces:
         session.execute("DROP KEYSPACE %s" % name)
     session.shutdown()
+
+
+def create_table(cluster, keyspace, name, columns, primary_key):
+    """Created a table
+       :param cluster: instance of cassandra.Cluster
+       :param keyspace: keyspace name
+       :param name: name of table
+       :param columns: dict of columns names and types
+       :param primary_key: list of columns included to promary key
+    """
+    session = cluster.connect()
+    if keyspace not in cluster.metadata.keyspaces:
+        create_keyspace()
+    session.set_keyspace(keyspace)
+    query = """CREATE TABLE IF NOT EXISTS %s
+               (%s, PRIMARY KEY(%s))
+            """ % (name,
+                   ', '.join(['%s %s' % (k, v) for k, v in columns.items()]),
+                   ', '.join(primary_key),)
+    session.execute(query)
+    session.shutdown()
