@@ -83,6 +83,7 @@ class CassandraBackend(Timeseries):
             for tstamp in timestamps:
                 self._insert_data(
                     name, value, tstamp, interval, config, **kwargs)
+        self._shutdown_session()
 
     def _insert_data(self, name, value, timestamp, interval, config):
         stmt = self._insert_stmt(name, value, timestamp, interval, config)
@@ -114,6 +115,7 @@ class CassandraBackend(Timeseries):
             for r_bucket, row_data in data.values()[0].items():
                 rval[config['r_calc'].from_bucket(r_bucket)] = process_row(row_data)
 
+        self._shutdown_session()
         return rval
 
     def _series(self, name, interval, config, buckets, **kws):
@@ -146,19 +148,22 @@ class CassandraBackend(Timeseries):
                         rval[i_key][r_key] = process_row(r_data)
                     else:
                         rval[i_key][r_key] = self._type_no_value()
-
+        self._shutdown_session()
         return rval
 
     def delete(self, name):
         self._get_session().execute(
             "DELETE FROM %s WHERE name='%s'" % (self._table, name))
+        self._shutdown_session()
 
     def delete_all(self):
         self._get_session().execute("TRUNCATE %s", [self._table])
+        self._shutdown_session()
 
     def list(self):
         res = self._get_session().execute(
             "SELECT name FROM %s", [self._table])
+        self._shutdown_session()
         return [row.name for row in res]
 
     def properties(self, name):
@@ -248,7 +253,7 @@ class CassandraSeries(CassandraBackend, Series):
         for row in rows:
             r_time = None if row.r_time == -1 else row.r_time
             rval.setdefault(row.i_time, OrderedDict())[r_time] = row.value
-
+        self._shutdown_session()
         return rval
 
 
@@ -308,6 +313,7 @@ class CassandraHistogram(CassandraBackend, Histogram):
             r_time = None if row.r_time == -1 else row.r_time
             rval.setdefault(row.i_time, OrderedDict()).setdefault(
                 r_time, {})[row.value] = row.count
+        self._shutdown_session()
         return rval
 
 
@@ -362,6 +368,7 @@ class CassandraCount(CassandraBackend, Count):
         for row in rows:
             r_time = None if row.r_time == -1 else row.r_time
             rval.setdefault(row.i_time, OrderedDict())[r_time] = row.count
+        self._shutdown_session()
         return rval
 
 
@@ -418,6 +425,7 @@ class CassandraGauge(CassandraBackend, Gauge):
         for row in rows:
             r_time = None if row.r_time == -1 else row.r_time
             rval.setdefault(row.i_time, OrderedDict())[r_time] = row.value
+        self._shutdown_session()
         return rval
 
 
@@ -471,6 +479,7 @@ class CassandraSet(CassandraBackend, Set):
             r_time = None if row.r_time == -1 else row.r_time
             rval.setdefault(row.i_time, OrderedDict()).setdefault(
                 r_time, set()).add(row.value)
+        self._shutdown_session()
         return rval
 
 

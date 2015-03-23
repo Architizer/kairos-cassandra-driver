@@ -39,7 +39,7 @@ def create_table(cluster, keyspace, name, columns, primary_key):
     """
     session = cluster.connect()
     if keyspace not in cluster.metadata.keyspaces:
-        create_keyspace()
+        create_keyspace(cluster, keyspace)
     session.set_keyspace(keyspace)
     query = """CREATE TABLE IF NOT EXISTS %s
                (%s, PRIMARY KEY(%s))
