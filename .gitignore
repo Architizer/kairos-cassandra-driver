@@ -53,3 +53,5 @@ target/
 # Emacs
 *.~undo-tree~
 *~
+*#
+.#*

@@ -9,9 +9,13 @@ from kairos.timeseries import (BACKENDS, Series, Histogram,
                                Gauge, Set, Count,)
 from kairos.cassandra_backend import TYPE_MAP, QUOTE_TYPES, QUOTE_MATCH
 
+from cassandra import ConsistencyLevel
+from cassandra.query import SimpleStatement
+
 from collections import OrderedDict
 
 from .utils import create_table
+from .helpers import calculate_irtime
 
 
 class Timeseries(kairos.Timeseries):
@@ -49,7 +53,7 @@ class CassandraBackend(Timeseries):
             'gauge': CassandraGauge,
             'set': CassandraSet,
         }
-        ttype = kwargs.get('type', None)
+        ttype = kwargs.pop('type', None)
         type_cls = ttypes_map.get(ttype)
         if type_cls:
             return type_cls.__new__(type_cls, *args, **kwargs)
@@ -61,6 +65,10 @@ class CassandraBackend(Timeseries):
         self._table = kwargs.get('table_name', self._table)
         self.cluster = client
         self._keyspace = kwargs.get('keyspace', 'kairos')
+        self.write_consistency_level = kwargs.get(
+            'write_consistency_level', ConsistencyLevel.ONE)
+        self.read_consistency_level = kwargs.get(
+            'read_consistency_level', ConsistencyLevel.ONE)
         super(CassandraBackend, self).__init__(client, **kwargs)
 
     def _get_session(self):
@@ -88,6 +96,7 @@ class CassandraBackend(Timeseries):
     def _insert_data(self, name, value, timestamp, interval, config):
         stmt = self._insert_stmt(name, value, timestamp, interval, config)
         if stmt:
+            stmt = SimpleStatement(stmt, consistency_level=self.write_consistency_level)
             self._get_session().execute(stmt)
 
     def _insert_stmt(self, name, value, timestamp, interval, config):
@@ -152,8 +161,9 @@ class CassandraBackend(Timeseries):
         return rval
 
     def delete(self, name):
-        self._get_session().execute(
-            "DELETE FROM %s WHERE name='%s'" % (self._table, name))
+        query = SimpleStatement("DELETE FROM %s WHERE name='%s'" % (self._table, name),
+                                consistency_level=self.write_consistency_level)
+        self._get_session().execute(query)
         self._shutdown_session()
 
     def delete_all(self):
@@ -161,8 +171,8 @@ class CassandraBackend(Timeseries):
         self._shutdown_session()
 
     def list(self):
-        res = self._get_session().execute(
-            "SELECT name FROM %s", [self._table])
+        query = SimpleStatement("SELECT name FROM %s", consistency_level=self.read_consistency_level)
+        res = self._get_session().execute(query, [self._table])
         self._shutdown_session()
         return [row.name for row in res]
 
@@ -171,28 +181,33 @@ class CassandraBackend(Timeseries):
 
         for interval, config in self._intervals.items():
             rval.setdefault(interval, {})
-
-            i_time_first = self._get_session().execute(
+            query_first = SimpleStatement(
                 '''SELECT i_time
                    FROM %s
                    WHERE name=%s AND interval=%s
                    ORDER BY interval ASC, i_time ASC
                    LIMIT 1''',
-                [self._table, name, interval]
+                consistency_level=self.read_consistency_level
             )
+            i_time_first = self._get_session().execute(query_first,
+                                                       [self._table, name, interval])
+            
             rval[interval]['first'] = config['i_calc'].from_bucket(
                 i_time_first[0].i_time)
-            i_time_last = self._get_session().execute(
+
+            query_last = SimpleStatement(
                 '''SELECT i_time
                    FROM %s
                    WHERE name=%s AND interval=%s
                    ORDER BY interval ASC, i_time ASC
                    LIMIT 1''',
-                [self._table, name, interval]
+                consistency_level=self.read_consistency_level
             )
+            i_time_last = self._get_session().execute(query_last,
+                                                      [self._table, name, interval])
             rval[interval]['last'] = config['i_calc'].from_bucket(
                 i_time_last[0].i_time)
-
+        self._shutdown_session()
         return rval
 
 
@@ -218,11 +233,7 @@ class CassandraSeries(CassandraBackend, Series):
         if expire and not ttl:
             return None
 
-        i_time = config['i_calc'].to_bucket(timestamp)
-        if not config['coarse']:
-            r_time = config['r_calc'].to_bucket(timestamp)
-        else:
-            r_time = -1
+        i_time, r_time = calculate_irtime(config, timestamp)
 
         table_spec = self._table
         if ttl:
@@ -249,6 +260,7 @@ class CassandraSeries(CassandraBackend, Series):
         stmt = query % {'name': name, 'table': self._table,
                         'interval': interval, 'i_bucket': i_bucket,
                         'i_end': i_end}
+        stmt = SimpleStatement(stmt, consistency_level=self.read_consistency_level)
         rows = self._get_session().execute(stmt)
         for row in rows:
             r_time = None if row.r_time == -1 else row.r_time
@@ -276,11 +288,7 @@ class CassandraHistogram(CassandraBackend, Histogram):
         if expire and not ttl:
             return None
 
-        i_time = config['i_calc'].to_bucket(timestamp)
-        if not config['coarse']:
-            r_time = config['r_calc'].to_bucket(timestamp)
-        else:
-            r_time = -1
+        i_time, r_time = calculate_irtime(config, timestamp)
 
         table_spec = self._table
         if ttl:
@@ -307,7 +315,8 @@ class CassandraHistogram(CassandraBackend, Histogram):
         else:
             stmt += ' AND i_time = %s' % (i_bucket)
         stmt += ' ORDER BY interval, i_time, r_time'
-
+        
+        stmt = SimpleStatement(stmt, consistency_level=self.read_consistency_level)
         rows = self._get_session().execute(stmt)
         for row in rows:
             r_time = None if row.r_time == -1 else row.r_time
@@ -335,9 +344,7 @@ class CassandraCount(CassandraBackend, Count):
         if expire and not ttl:
             return None
 
-        i_time = config['i_calc'].to_bucket(timestamp)
-        r_time = (-1 if config['coarse']
-                  else config['r_calc'].to_bucket(timestamp))
+        i_time, r_time = calculate_irtime(config, timestamp)
 
         table_spec = self._table
         if ttl:
@@ -364,6 +371,7 @@ class CassandraCount(CassandraBackend, Count):
             stmt += ' AND i_time = %s'%(i_bucket)
         stmt += ' ORDER BY interval, i_time, r_time'
 
+        stmt = SimpleStatement(stmt, consistency_level=self.read_consistency_level)
         rows = self._get_session().execute(stmt)
         for row in rows:
             r_time = None if row.r_time == -1 else row.r_time
@@ -390,11 +398,7 @@ class CassandraGauge(CassandraBackend, Gauge):
         if expire and not ttl:
             return None
 
-        i_time = config['i_calc'].to_bucket(timestamp)
-        if not config['coarse']:
-            r_time = config['r_calc'].to_bucket(timestamp)
-        else:
-            r_time = -1
+        i_time, r_time = calculate_irtime(config, timestamp)
 
         table_spec = self._table
         if ttl:
@@ -421,6 +425,7 @@ class CassandraGauge(CassandraBackend, Gauge):
             stmt += ' AND i_time = %s'%(i_bucket)
         stmt += ' ORDER BY interval, i_time, r_time'
 
+        stmt = SimpleStatement(stmt, consistency_level=self.read_consistency_level)
         rows = self._get_session().execute(stmt)
         for row in rows:
             r_time = None if row.r_time == -1 else row.r_time
@@ -447,11 +452,7 @@ class CassandraSet(CassandraBackend, Set):
         if expire and not ttl:
             return None
 
-        i_time = config['i_calc'].to_bucket(timestamp)
-        if not config['coarse']:
-            r_time = config['r_calc'].to_bucket(timestamp)
-        else:
-            r_time = -1
+        i_time, r_time = calculate_irtime(config, timestamp)
 
         stmt = """INSERT INTO %s (name, interval, i_time, r_time, value)
                   VALUES ('%s', '%s', %s, %s, %s)
@@ -474,6 +475,7 @@ class CassandraSet(CassandraBackend, Set):
             stmt += ' AND i_time = %s' % (i_bucket)
         stmt += ' ORDER BY interval, i_time, r_time'
 
+        stmt = SimpleStatement(stmt, consistency_level=self.read_consistency_level)
         rows = self._get_session().execute(stmt)
         for row in rows:
             r_time = None if row.r_time == -1 else row.r_time
