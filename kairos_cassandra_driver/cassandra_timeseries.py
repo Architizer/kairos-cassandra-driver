@@ -65,6 +65,7 @@ class CassandraBackend(Timeseries):
         self._table = kwargs.get('table_name', self._table)
         self.cluster = client
         self._keyspace = kwargs.get('keyspace', 'kairos')
+        self._create_table = kwargs.get('create_table', True)
         self.write_consistency_level = kwargs.get(
             'write_consistency_level', ConsistencyLevel.ONE)
         self.read_consistency_level = kwargs.get(
@@ -222,9 +223,10 @@ class CassandraSeries(CassandraBackend, Series):
         self.default_columns.update(
             {'value': ('list<%s>' % self._value_type)})
 
-        create_table(self.cluster, self._keyspace, self._table,
-                     self.default_columns,
-                     ['name', 'interval', 'i_time', 'r_time'])
+        if self._create_table:
+            create_table(self.cluster, self._keyspace, self._table,
+                         self.default_columns,
+                         ['name', 'interval', 'i_time', 'r_time'])
 
     def _insert_stmt(self, name, value, timestamp, interval, config):
         '''Helper to generate the insert statement.'''
@@ -277,9 +279,11 @@ class CassandraHistogram(CassandraBackend, Histogram):
 
         self.default_columns.update(
             {'value': self._value_type, 'count': 'counter'})
-        create_table(self.cluster, self._keyspace, self._table,
-                     self.default_columns,
-                     ['name', 'interval', 'i_time', 'r_time', 'value'])
+
+        if self._create_table:
+            create_table(self.cluster, self._keyspace, self._table,
+                         self.default_columns,
+                         ['name', 'interval', 'i_time', 'r_time', 'value'])
 
     def _insert_stmt(self, name, value, timestamp, interval, config):
         '''Helper to generate the insert statement.'''
@@ -333,9 +337,11 @@ class CassandraCount(CassandraBackend, Count):
         super(CassandraCount, self).__init__(*args, **kwargs)
 
         self.default_columns.update({'count': 'counter'})
-        create_table(self.cluster, self._keyspace, self._table,
-                     self.default_columns,
-                     ['name', 'interval', 'i_time', 'r_time'])
+
+        if self._create_table:
+            create_table(self.cluster, self._keyspace, self._table,
+                         self.default_columns,
+                         ['name', 'interval', 'i_time', 'r_time'])
 
     def _insert_stmt(self, name, value, timestamp, interval, config):
         '''Helper to generate the insert statement.'''
@@ -387,9 +393,11 @@ class CassandraGauge(CassandraBackend, Gauge):
         super(CassandraGauge, self).__init__(*args, **kwargs)
 
         self.default_columns.update({'value': self._value_type})
-        create_table(self.cluster, self._keyspace, self._table,
-                     self.default_columns,
-                     ['name', 'interval', 'i_time', 'r_time'])
+
+        if self._create_table:
+            create_table(self.cluster, self._keyspace, self._table,
+                         self.default_columns,
+                         ['name', 'interval', 'i_time', 'r_time'])
 
     def _insert_stmt(self, name, value, timestamp, interval, config):
         '''Helper to generate the insert statement.'''
@@ -441,9 +449,11 @@ class CassandraSet(CassandraBackend, Set):
         super(CassandraSet, self).__init__(*args, **kwargs)
 
         self.default_columns.update({'value': self._value_type})
-        create_table(self.cluster, self._keyspace, self._table,
-                     self.default_columns,
-                     ['name', 'interval', 'i_time', 'r_time', 'value'])
+
+        if self._create_table:
+            create_table(self.cluster, self._keyspace, self._table,
+                         self.default_columns,
+                         ['name', 'interval', 'i_time', 'r_time', 'value'])
 
     def _insert_stmt(self, name, value, timestamp, interval, config):
         '''Helper to generate the insert statement.'''
